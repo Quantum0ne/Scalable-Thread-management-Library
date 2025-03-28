@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ThreadPool Manager</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+        }
+        .panel {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .panel-header {
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #333;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+        .control-panel {
+            grid-column: span 1;
+        }
+        .metrics-panel {
+            grid-column: span 2;
+        }
+        .thread-visualization {
+            grid-column: span 3;
+            height: 300px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 5px;
+            margin-bottom: 5px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        .thread-indicator {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .idle { background: #4CAF50; }
+        .working { background: #FFC107; }
+        .waiting { background: #2196F3; }
+        .error { background: #F44336; }
+    </style>
+</head>
+<body>
+    <h1>ThreadPool Manager Dashboard</h1>
+    
+    <div class="dashboard">
+        <div class="panel control-panel">
+            <div class="panel-header">Pool Controls</div>
+            <div>
+                <button id="addThread">Add Thread</button>
+                <button id="removeThread">Remove Thread</button>
+                <button id="pausePool">Pause Pool</button>
+                <button id="resumePool">Resume Pool</button>
+            </div>
+            
+            <div class="panel-header">Task Submission</div>
+            <div>
+                <textarea id="taskCode" rows="5" style="width:100%" placeholder="() => { /* your task code */ }"></textarea>
+                <div>
+                    Priority: 
+                    <select id="taskPriority">
+                        <option value="high">High</option>
+                        <option value="normal" selected>Normal</option>
+                        <option value="low">Low</option>
+                    </select>
+                    <button id="submitTask">Submit Task</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="panel metrics-panel">
+            <div class="panel-header">Performance Metrics</div>
+            <div>
+                <canvas id="metricsChart"></canvas>
+            </div>
+        </div>
+        
+        <div class="panel thread-visualization">
+            <div class="panel-header">Thread Activity</div>
+            <div id="threadContainer"></div>
+        </div>
+    </div>
+
+    <script>
+        // Connect to WebSocket
+        const ws = new WebSocket(`ws://${window.location.hostname}:3000`);
+        
+        // Initialize chart
+        const ctx = document.getElementById('metricsChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array(10).fill().map((_, i) => i + 's'),
+                datasets: [
+                    {
+                        label: 'Active Threads',
+                        data: Array(10).fill(0),
+                        borderColor: 'rgb(75, 192, 192)',
+                        tension: 0.1
+                    },
+                    {
+                        label: 'Queue Size',
+                        data: Array(10).fill(0),
+                        borderColor: 'rgb(255, 159, 64)',
+                        tension: 0.1
+                    },
+                    {
+                        label: 'CPU Usage %',
+                        data: Array(10).fill(0),
+                        borderColor: 'rgb(255, 99, 132)',
+                        tension: 0.1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+
+        // Handle WebSocket messages
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            updateThreadDisplay(data.threads);
+            updateChart(data.metrics);
+        };
+
+        // Update thread display
+        function updateThreadDisplay(threads) {
+            const container = document.getElementById('threadContainer');
+            container.innerHTML = '';
+            
+            threads.forEach(thread => {
+                const threadEl = document.createElement('div');
+                threadEl.innerHTML = `
+                    <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                        <div class="thread-indicator ${thread.state}"></div>
+                        <strong>Thread ${thread.id}</strong>: 
+                        ${thread.state.toUpperCase()} 
+                        ${thread.currentTask ? `(Task: ${thread.currentTask})` : ''}
+                        <div style="margin-left: auto;">CPU: ${thread.cpuUsage.toFixed(1)}%</div>
+                    </div>
+                    <progress value="${thread.cpuUsage}" max="100" style="width:100%"></progress>
+                `;
+                container.appendChild(threadEl);
+            });
+        }
+
+        // Update chart data
+        function updateChart(metrics) {
+            // Shift old data
+            chart.data.labels.shift();
+            chart.data.datasets.forEach(dataset => dataset.data.shift());
+            
+            // Add new data
+            chart.data.labels.push(new Date().toLocaleTimeString());
+            chart.data.datasets[0].data.push(metrics.activeThreads || 0);
+            chart.data.datasets[1].data.push(metrics.queuedTasks || 0);
+            chart.data.datasets[2].data.push(metrics.systemCpu || 0);
+            
+            chart.update();
+        }
+
+        // Button event handlers
+        document.getElementById('addThread').addEventListener('click', () => {
+            fetch('/api/threads/add', { method: 'POST' });
+        });
+
+        document.getElementById('removeThread').addEventListener('click', () => {
+            fetch('/api/threads/remove', { method: 'POST' });
+        });
+
+        document.getElementById('pausePool').addEventListener('click', () => {
+            fetch('/api/pool/pause', { method: 'POST' });
+        });
+
+        document.getElementById('resumePool').addEventListener('click', () => {
+            fetch('/api/pool/resume', { method: 'POST' });
+        });
+
+        document.getElementById('submitTask').addEventListener('click', () => {
+            const code = document.getElementById('taskCode').value;
+            const priority = document.getElementById('taskPriority').value;
+            fetch('/api/tasks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code, priority })
+            });
+        });
+    </script>
+</body>
+</html>
